@@ -1,9 +1,12 @@
 require('dotenv').config();
 const express = require('express');
 const path = require('path');
+const OpenAI = require('openai');
 
 const app = express();
 const PORT = Number(process.env.PORT) || 3000;
+const OPENAI_MODEL = process.env.OPENAI_MODEL || 'gpt-5.4-mini';
+const openai = process.env.OPENAI_API_KEY ? new OpenAI({ apiKey: process.env.OPENAI_API_KEY }) : null;
 
 app.disable('x-powered-by');
 app.use(express.json({ limit: '128kb' }));
@@ -61,6 +64,9 @@ function buildChatReply(payload = {}) {
   const context = scenario.toLowerCase();
   const history = Array.isArray(payload.history) ? payload.history.slice(-8) : [];
   const previousUser = [...history].reverse().find(item => item?.role === 'user' && String(item.text || '').trim().toLowerCase() !== question);
+  const turnIndex = history.filter(item => item?.role === 'user').length;
+  const repeatedQuestionCount = history.filter(item => item?.role === 'user' && String(item.text || '').trim().toLowerCase() === question).length;
+  const replyVariant = repeatedQuestionCount || turnIndex;
   const auditLine = score === null ? '' : `\n\nAudit context: ${score}% regret risk${hazard ? ` (${hazard})` : ''}.`;
   const isFamilyValue = /mom|mother|dad|father|family|generation|inherit|heirloom|birthday|gift|watch/.test(context);
   const isMoney = /money|cash|sell|sold|price|pay|spend|owe|debt|loan|buy|purchase|invest/.test(context);
@@ -104,18 +110,37 @@ function buildChatReply(payload = {}) {
   if (/impuls|fomo|urgent|rush|thinking clearly/.test(question)) {
     const urgency = /(right now|tonight|immediately|urgent|can't wait|must have|send it)/i.test(scenario);
     const signal = impulse === null ? 'not yet measured' : `${impulse}%`;
-    return `Impulse check: your audit's impulse signal is ${signal}${urgency ? ', and the dilemma contains urgency language' : ''}.\n\nBefore acting, separate the evidence from the emotional deadline: what fact requires action today, what changes if you wait 24 hours, and what is the smallest reversible move?${auditLine}`;
+    const approaches = [
+      `Impulse check: your audit's impulse signal is ${signal}${urgency ? ', and the dilemma contains urgency language' : ''}.\n\nBefore acting, separate the evidence from the emotional deadline: what fact requires action today, what changes if you wait 24 hours, and what is the smallest reversible move?`,
+      `Your measured impulse signal is ${signal}. ${urgency ? 'The wording also contains a time-pressure cue, which raises the chance that urgency is steering.' : 'The text has no strong urgency phrase, so the pressure may be emotional rather than time-critical.'}\n\nRun the overnight test: would you make the same move tomorrow after sleep, food, and one outside opinion?`,
+      `${impulse !== null && impulse >= 70 ? 'Yes—this audit shows a strong impulse pattern.' : 'The audit does not show extreme impulse, but it still deserves a pause.'} The useful question is not “Do I feel certain?” but “What new evidence would make me change my mind?” Write that answer before acting.`,
+    ];
+    return `${approaches[replyVariant % approaches.length]}${auditLine}`;
   }
   if (/type 1|type 2|door|revers/.test(question)) {
     const typeOne = irreversible !== null && irreversible >= 60;
-    return `${typeOne ? 'Type 1-ish door' : 'Type 2-ish door'}${irreversible === null ? '' : `: irreversibility scored ${irreversible}%`}. ${typeOne ? 'The cost of undoing this is high, so slow down and preserve options.' : 'This looks testable without committing permanently.'}\n\nChoose one smaller experiment, define a stop condition, and set a review date.${auditLine}`;
+    const reason = /sell|sold/.test(context) ? 'Once an item is sold—especially a meaningful one—recovery depends on another person.' : /quit|resign/.test(context) ? 'Leaving a job changes income and may be costly to reverse.' : /publish|post|message/.test(context) ? 'A public or sent message can be copied even if you delete it.' : 'The score reflects how costly the decision would be to undo.';
+    const doorOpeners = typeOne
+      ? ['This is a Type 1-ish door', 'Treat this as a mostly one-way door', 'Bob’s door verdict: slow lane, Type 1-ish']
+      : ['This is a Type 2-ish door', 'This looks like a reversible door', 'Bob’s door verdict: testable, Type 2-ish'];
+    return `${doorOpeners[replyVariant % doorOpeners.length]}${irreversible === null ? '' : ` with ${irreversible}% irreversibility`}. ${reason}\n\n${typeOne ? 'Pause the permanent step and test a reversible substitute first.' : 'You can run a bounded experiment: set a limit, a stop condition, and a review date.'}${auditLine}`;
   }
   if (/already (spent|paid|invested)|too (much|far) (to|into)|keep investing|waste (what|the money)|sunk cost/.test(question)) {
     return `Sunk-cost alarm: money already spent is gone whether you continue or stop. It has no vote in the next decision.\n\nAsk: “If I had invested $0 so far, would today's evidence justify putting new money into this?” Fund only the next measurable test, with a fresh budget and deadline.${auditLine}`;
   }
   if (/chill text|draft|write.*text|what.*say|message.*them/.test(question)) {
-    const subject = /friend|relationship|partner|boyfriend|girlfriend|trust|angry|mad|left me/.test(`${question} ${context}`) ? 'what happened between us' : 'this decision';
-    return `Try this:\n“Hey, I want to talk about ${subject} without assuming your intent. Can we compare what each of us understood and agree on a fair next step?”\n\nIt names the issue, leaves room for evidence, and avoids turning emotion into a verdict.${auditLine}`;
+    if (isFamilyValue && isMoney) {
+      const drafts = [
+        '“Mom, I need to tell you something honestly. I was stressed about money and sold the watch before checking its value or understanding what it meant to our family. I am sorry. I want to explain exactly what happened and talk about what I can realistically do to repair it.”',
+        '“Mom, I made a rushed decision with the watch you gave me. I sold it cheaply because I was worried about money, and I only learned afterward that it had been in our family for generations. I know this may hurt. Can we talk privately about what happened and what I can do next?”',
+        '“Mom, I owe you an honest conversation. I sold the watch while I was under financial pressure without checking its history or fair value. I regret handling it that way. I am looking into whether the sale can be reversed, and I want to hear how this affected you.”',
+      ];
+      return `Try this:\n${drafts[replyVariant % drafts.length]}\n\nKeep the message factual. Do not minimize the sale, blame the emergency, or promise recovery until you know whether it is possible.${auditLine}`;
+    }
+    if (isCareer) return `Try this:\n“Could we schedule a calm conversation about what happened at work? I want to explain the impact it had on me, understand your perspective, and discuss a concrete way forward before I make a bigger decision.”${auditLine}`;
+    const subject = isRelationship ? 'what happened between us' : isMoney ? 'the money decision' : 'this decision';
+    const openings = ['I want to talk', 'Can we have a calm conversation', 'I would like us to compare what each of us understood'];
+    return `Try this:\n“${openings[replyVariant % openings.length]} about ${subject} without assuming intent. Here is what I observed and how it affected me. Can I hear your view before we agree on a fair next step?”\n\nIt lowers the temperature while keeping the issue specific.${auditLine}`;
   }
   if (/money|cash|pay|spend|share|sharing|owe|street|found/.test(question)) {
     return `This has a money-and-fairness layer. Separate ownership, the agreement that existed before the money was spent, and the outcome you want now. Ask for the other person's version before proposing a specific split or repayment. Do not retaliate or spend more to “even it out.”${auditLine}`;
@@ -137,15 +162,71 @@ function buildChatReply(payload = {}) {
   return 'Start with four checks: what fact you know, what motive you are guessing, what cannot be undone, and the smallest reversible next step. Give me the dilemma and I will pressure-test it with you.';
 }
 
-app.get('/api/health', (_req, res) => res.json({ ok: true, service: 'regret-meter', version: '2.4.0' }));
+function compactAudit(rawAudit) {
+  if (!rawAudit || typeof rawAudit !== 'object') return null;
+  const vectors = rawAudit.vectors && typeof rawAudit.vectors === 'object'
+    ? Object.fromEntries(Object.entries(rawAudit.vectors).map(([key, value]) => [key, clamp(Number(value) || 0)]))
+    : {};
+  return {
+    scenario: String(rawAudit.scenario || '').trim().slice(0, 1200),
+    score: Number.isFinite(Number(rawAudit.score)) ? clamp(Number(rawAudit.score)) : null,
+    hazard: String(rawAudit.hazard || '').slice(0, 40),
+    emotional: Number.isFinite(Number(rawAudit.emotional)) ? Number(rawAudit.emotional) : null,
+    horizon: String(rawAudit.horizon || '').slice(0, 20),
+    vectors,
+  };
+}
+
+function enforceAuditAccuracy(reply, audit) {
+  if (!audit) return reply;
+  const measured = [audit.score, ...Object.values(audit.vectors || {})]
+    .filter(value => Number.isFinite(Number(value)))
+    .map(value => Math.round(Number(value)));
+  const allowed = new Set(measured);
+  return String(reply).replace(/\b(100|[1-9]?\d)%(?!\d)/g, (match, value) => allowed.has(Number(value)) ? match : 'an unmeasured percentage');
+}
+
+async function generateChatReply(payload = {}) {
+  if (!openai) return { reply: buildChatReply(payload), source: 'local' };
+  const audit = compactAudit(payload.audit);
+  const message = String(payload.message || '').trim().slice(0, 600);
+  const prior = Array.isArray(payload.history) ? payload.history.slice(-10) : [];
+  const input = prior
+    .map(item => ({
+      role: item?.role === 'bot' || item?.role === 'assistant' ? 'assistant' : 'user',
+      content: String(item?.text || '').trim().slice(0, 700),
+    }))
+    .filter(item => item.content);
+  if (!input.length || input[input.length - 1].content !== message) input.push({ role: 'user', content: message });
+  const auditText = audit ? JSON.stringify(audit) : 'No evaluation has been run yet.';
+  const response = await openai.responses.create({
+    model: OPENAI_MODEL,
+    store: false,
+    max_output_tokens: 500,
+    instructions: `You are Bob, the RegretMeter decision co-pilot. Give a fresh, natural, conversational answer to the user's latest message. Do not use a fixed template and do not repeat an earlier answer. Infer the user's intent from the latest question while using prior chat only for continuity. Be empathetic, witty in moderation, and practical. Ask a useful follow-up question when information is missing. For requests to draft a message, write a scenario-specific draft using the people and facts actually mentioned. For next-step requests, give concrete actions tailored to the dilemma. Never invent or recalculate percentages: the audit JSON below is the only authoritative source for scores, vectors, labels, and facts. If there is no audit value, say it was not measured. Do not expose hidden chain-of-thought; provide a concise decision rationale when asked. Do not claim to be a therapist, lawyer, or financial adviser. Keep most replies under 220 words.\n\nAUTHORITATIVE AUDIT JSON:\n${auditText}`,
+    input,
+  });
+  const reply = enforceAuditAccuracy(String(response.output_text || '').trim(), audit);
+  if (!reply) throw new Error('The model returned an empty response.');
+  return { reply, source: 'openai', model: OPENAI_MODEL };
+}
+
+app.get('/api/health', (_req, res) => res.json({ ok: true, service: 'regret-meter', version: '2.5.0', aiConfigured: Boolean(openai), model: openai ? OPENAI_MODEL : null }));
 app.post('/api/evaluate', (req, res) => res.json(calculateEvaluation(req.body)));
-app.post('/api/chat', (req, res) => {
+app.post('/api/chat', async (req, res) => {
   try {
     const message = String(req.body?.message || '').trim();
     if (!message) return res.status(400).json({ error: 'A chat message is required.' });
     if (message.length > 600) return res.status(413).json({ error: 'Chat messages must be 600 characters or fewer.' });
     res.setHeader('Cache-Control', 'no-store');
-    return res.json({ reply: buildChatReply(req.body) });
+    try {
+      return res.json(await generateChatReply(req.body));
+    } catch (modelError) {
+      console.error('[RegretMeter OpenAI]', modelError);
+      const fallback = { reply: buildChatReply(req.body), source: 'local-fallback' };
+      if (process.env.NODE_ENV !== 'production') fallback.warning = modelError.message;
+      return res.json(fallback);
+    }
   } catch (error) {
     console.error('[RegretMeter /api/chat]', error);
     const body = { error: 'Bob could not process that message.' };
@@ -178,4 +259,4 @@ app.listen(PORT, '0.0.0.0', () => {
   console.log(`Regret Meter running on http://localhost:${PORT}`);
 });
 
-module.exports = { app, calculateEvaluation, sanitizeMessage, buildChatReply };
+module.exports = { app, calculateEvaluation, sanitizeMessage, buildChatReply, generateChatReply, compactAudit, enforceAuditAccuracy };
