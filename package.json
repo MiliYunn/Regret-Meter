@@ -1,0 +1,20 @@
+{
+  "name": "regret-meter",
+  "version": "2.4.0",
+  "private": true,
+  "description": "Behavioral decision auditing and impulse intervention suite",
+  "main": "server.js",
+  "type": "commonjs",
+  "scripts": {
+    "start": "node server.js",
+    "dev": "node --watch server.js",
+    "check": "node --check server.js && node --check app.js"
+  },
+  "engines": {
+    "node": ">=22"
+  },
+  "dependencies": {
+    "dotenv": "^17.2.2",
+    "express": "^5.1.0"
+  }
+}
